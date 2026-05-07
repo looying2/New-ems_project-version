@@ -1,0 +1,1057 @@
+import requests
+import streamlit as st
+import pandas as pd
+import numpy as np
+import time
+import sqlite3
+import joblib
+import json
+import os
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+from collections import deque
+import io
+from PIL import Image # For handling the camera image
+# import tensorflow as tf # Uncomment this when you have your actual model ready
+
+# ==========================================
+# 1. PAGE CONFIGURATION & AESTHETICS
+# ==========================================
+st.set_page_config(
+    page_title="AI-EMS Clinical Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    page_icon="🩺"
+)
+
+# SINGLE CONSOLIDATED CSS BLOCK
+st.markdown("""
+<style>
+    /* --- 1. GRADIENT BACKGROUND --- */
+    .stApp {
+        background: linear-gradient(135deg, #F0F2F6 0%, #E3F2FD 100%);
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        color: #31333F; /* Force dark text for readability */
+    }
+
+    /* --- HEADINGS --- */
+    h1, h2, h3 {
+        color: #264653; /* Dark Slate Blue */
+        font-weight: 600;
+    }
+
+    /* --- DASHBOARD CARDS --- */
+    .dashboard-card {
+        background-color: #FFFFFF;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        margin-bottom: 20px;
+        border: 1px solid #E0E0E0;
+    }
+
+/* Make all metric boxes the same height */
+div[data-testid="stMetric"] {
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+    /* --- METRIC BOXES --- */
+    div[data-testid="stMetric"] {
+        background-color: #FFFFFF;
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #EEEEEE;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 0.85rem;
+        color: #78909C;
+        font-weight: 500;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.8rem;
+        color: #2A9D8F;
+        font-weight: 700;
+    }
+
+    /* --- 2. ACTIVE TAB HIGHLIGHT --- */
+    button[data-baseweb="tab"] {
+        font-size: 16px;
+        font-weight: 400;
+        color: #607D8B;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        font-size: 18px !important;
+        font-weight: 700 !important;
+        background-color: #E3F2FD !important;
+        color: #264653 !important;
+        border-radius: 8px 8px 0 0;
+    }
+
+    /* --- 3. SESSION CONTROL BUTTONS (Columns 5, 6, 7) --- */
+    /* Start Button (Green) - Column 5 */
+    div[data-testid="column"]:nth-of-type(5) div.stButton > button {
+        background-color: #2E8B57; 
+        color: white; 
+        border: none;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    div[data-testid="column"]:nth-of-type(5) div.stButton > button:hover {
+        background-color: #3CB371;
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(46, 139, 87, 0.4);
+    }
+
+    /* Pause Button (Orange) - Column 6 */
+    div[data-testid="column"]:nth-of-type(6) div.stButton > button {
+        background-color: #FF8C00; 
+        color: white; 
+        border: none;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    div[data-testid="column"]:nth-of-type(6) div.stButton > button:hover {
+        background-color: #FFA500;
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(255, 140, 0, 0.4);
+    }
+
+    /* Stop Button (Red) - Column 7 */
+    div[data-testid="column"]:nth-of-type(7) div.stButton > button {
+        background-color: #D32F2F; 
+        color: white; 
+        border: none;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    div[data-testid="column"]:nth-of-type(7) div.stButton > button:hover {
+        background-color: #EF5350;
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(211, 47, 47, 0.4);
+    }
+
+    /* --- 4. HEADER EMERGENCY BUTTON (Column 4) --- */
+    div[data-testid="column"]:nth-of-type(4) div.stButton > button {
+        font-weight: 900 !important;
+        font-size: 1.1em !important;
+        text-transform: uppercase;
+        box-shadow: 0 4px 6px rgba(239, 83, 80, 0.3);
+        background-color: #EF5350 !important;
+        color: white !important;
+        border: none;
+    }
+
+    /* --- 5. INPUT BOXES (Patient ID, User Role, etc.) --- */
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="base-input"],
+    div[data-testid="stMultiSelect"] > div > div {
+        background-color: #F0F9FF !important; /* Bright Light Blue */
+        border: 1px solid #BAE6FD !important;
+        border-radius: 8px !important;
+    }
+    
+    /* Force text inside the input boxes to be dark */
+    input, select, div[data-baseweb="select"] span {
+        color: #264653 !important; /* Matches your Dark Slate Blue */
+        -webkit-text-fill-color: #264653 !important;
+        font-weight: 600 !important;
+    }
+
+    /* --- SIDEBAR & ALERTS --- */
+    section[data-testid="stSidebar"] {
+        background-color: #FFFFFF;
+        border-right: 1px solid #E0E0E0;
+    }
+    .alert-box {
+        padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid;
+    }
+    .alert-safe { background-color: #FFFFFF; border-color: #4CAF50; color: #1B5E20; }
+    .alert-risk { background-color: #FFEBEE; border-color: #EF5350; color: #B71C1C; }
+    .alert-info { background-color: #E3F2FD; border-color: #2196F3; color: #0D47A1; }
+
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 2. DATABASE & ML SETUP
+# ==========================================
+DB_PATH = "session_audit.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT,
+            patient_id TEXT,
+            event TEXT,
+            details TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def log_event(patient_id, event, details=""):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO audit_log (ts, patient_id, event, details) VALUES (?, ?, ?, ?)",
+        (datetime.now().isoformat(timespec="seconds"), patient_id, event, details)
+    )
+    conn.commit()
+    conn.close()
+
+def read_logs(patient_id, limit=200):
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(
+        "SELECT ts, event, details FROM audit_log WHERE patient_id=? ORDER BY id DESC LIMIT ?",
+        conn,
+        params=(patient_id, limit)
+    )
+    conn.close()
+    return df
+
+init_db()
+
+@st.cache_resource
+def load_model_assets():
+    try:
+        model = joblib.load("model.pkl")
+        with open("feature_cols.json", "r") as f:
+            features = json.load(f)
+        return model, features, "Online"
+    except FileNotFoundError:
+        return None, None, "Offline (Files Missing)"
+    except Exception as e:
+        return None, None, f"Error: {e}"
+
+rf_model, feature_names, model_status = load_model_assets()
+
+# ==========================================
+# 3. SESSION STATE
+# ==========================================
+def ss_init(key, value):
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+ss_init("elapsed_time", 0.0) 
+ss_init("system_status", "IDLE")
+ss_init("connected", True)
+ss_init("session_start_time", None)
+ss_init("intensity", 15)
+ss_init("frequency", 40)
+ss_init("pulse_width", 300)
+ss_init("duty_on", 10)
+ss_init("duty_off", 20)
+ss_init("telemetry", pd.DataFrame(columns=["t", "emg", "hr", "imp"]))
+ss_init("ml_window", None)
+ss_init("ml_prediction", "WAITING")
+ss_init("ml_probability", 0.0)
+ss_init("live_pain", 2)      # default pain score
+ss_init("live_fatigue", 4)    # default fatigue level
+
+# ==========================================
+# 4. HELPER FUNCTIONS
+# ==========================================
+
+def predict_muscle_state(emg_value):
+
+    if emg_value > 700:
+        return (
+            "Overexertion",
+            "🔴",
+            "High muscle stress detected"
+        )
+
+    elif emg_value > 500:
+        return (
+            "Muscle Fatigue",
+            "🟠",
+            "Sustained muscle activation observed"
+        )
+
+    elif emg_value > 300:
+        return (
+            "Moderate Activity",
+            "🟡",
+            "Normal rehabilitation activity"
+        )
+
+    else:
+        return (
+            "Relaxed",
+            "🟢",
+            "Low muscle activity"
+        )
+
+# EMG smoothing buffer
+smooth_buffer = deque(maxlen=10)
+
+def smooth_emg(value):
+    smooth_buffer.append(value)
+    return np.mean(smooth_buffer)
+
+def read_emg():
+    try:
+        r = requests.get("http://127.0.0.1:5000/emg")
+        data = r.json()
+
+        if len(data) > 0:
+            return data[-1]
+
+        return 0
+
+    except:
+        return 0
+
+def generate_ml_window(status):
+    window_size = 200
+    noise_level = 0.5
+    data = {}
+    muscles = ["Recto Femoral", "Biceps Femoral", "Vasto Medial", "EMG Semitendinoso"]
+    
+    for muscle in muscles:
+        t = np.linspace(0, 10, window_size)
+        base = np.sin(t) * 5 + np.random.normal(0, noise_level, window_size)
+        if status == "Risk (Abnormal)":
+            base = base * np.random.uniform(1.5, 3.0) + np.random.normal(0, 2, window_size)
+        data[muscle] = base
+    return pd.DataFrame(data)
+
+def extract_features(raw_window_df):
+    feats = {}
+    feats['rms_recto_femoral'] = np.sqrt(np.mean(raw_window_df["Recto Femoral"]**2))
+    feats['rms_biceps_femoral'] = np.sqrt(np.mean(raw_window_df["Biceps Femoral"]**2))
+    feats['rms_vasto_medial'] = np.sqrt(np.mean(raw_window_df["Vasto Medial"]**2))
+    feats['rms_emg_semitendinoso'] = np.sqrt(np.mean(raw_window_df["EMG Semitendinoso"]**2))
+    return pd.DataFrame([feats])
+
+def confirm_start_callback(pid, proto):
+    # 1. Logic: Reset timer bank only if this is a fresh start (not resuming)
+    if st.session_state.system_status != "PAUSED":
+        st.session_state.elapsed_time = 0.0
+
+    # 2. Update System State
+    st.session_state.system_status = "ACTIVE"
+    st.session_state.session_start_time = time.time()
+
+    # 3. Logging (Protected)
+    try:
+        log_event(pid, "SESSION_START", f"Protocol={proto}")
+    except Exception:
+        pass
+
+def update_telemetry_stream():
+    df = st.session_state.telemetry.copy()
+    now = datetime.now().strftime("%H:%M:%S")
+
+    if st.session_state.system_status == "ACTIVE":
+        raw_emg = read_emg()
+        emg = smooth_emg(raw_emg)
+        hr = int(np.clip(np.random.normal(74, 3), 60, 110))
+        imp = float(np.clip(np.random.normal(1.2, 0.1), 0.7, 2.5))
+    else:
+        emg = np.random.normal(0, 2)
+        hr = int(np.random.normal(72, 2))
+        imp = float(np.random.normal(1.2, 0.1))
+
+    new_row = pd.DataFrame([{"t": now, "emg": emg, "hr": hr, "imp": imp}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    st.session_state.telemetry = df.tail(200)
+
+def generate_report(pid, mass_df, pain_df, fatigue_df):
+    """Generates a text report for download."""
+    report_buffer = io.StringIO()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    report_buffer.write(f"RehaTech Clinical Progress Report\n")
+    report_buffer.write(f"=================================\n")
+    report_buffer.write(f"Patient ID: {pid}\n")
+    report_buffer.write(f"Date Generated: {timestamp}\n\n")
+    
+    report_buffer.write(f"1. SESSION METRICS (Current)\n")
+    report_buffer.write(f"----------------------------\n")
+    report_buffer.write(f"Start Pain Score: {pain_df.iloc[0]['Pain Score']}\n")
+    report_buffer.write(f"End Pain Score:   {pain_df.iloc[-1]['Pain Score']} (Improvement: {pain_df.iloc[0]['Pain Score'] - pain_df.iloc[-1]['Pain Score']})\n")
+    report_buffer.write(f"End Fatigue Lvl:  {fatigue_df.iloc[-1]['Fatigue Level']}\n\n")
+    
+    report_buffer.write(f"2. MUSCLE MASS TREND (Last 10 Sessions)\n")
+    report_buffer.write(f"-------------------------------------\n")
+    # Taking last 5 entries for brevity in text report
+    recent_mass = mass_df.tail(5)
+    for _, row in recent_mass.iterrows():
+        date_str = row['Date'].strftime("%Y-%m-%d")
+        report_buffer.write(f"{date_str}: {row['Muscle Mass (kg)']:.2f} kg\n")
+        
+    start_mass = mass_df.iloc[0]['Muscle Mass (kg)']
+    current_mass = mass_df.iloc[-1]['Muscle Mass (kg)']
+    change = current_mass - start_mass
+    report_buffer.write(f"\nTotal Mass Gain: {change:+.2f} kg\n")
+    
+    report_buffer.write(f"\n=================================\n")
+    report_buffer.write(f"End of Report\n")
+    
+    return report_buffer.getvalue()
+
+# --- NEW FUNCTION: SCAN ANALYSIS ---
+def analyze_scan_image(image_buffer):
+    """
+    Simulates CNN analysis of a DEXA/BIA scan image.
+    Replace the commented sections with real model code later.
+    """
+    # 1. Load and Preprocess Image
+    img = Image.open(image_buffer)
+    # img = img.resize((224, 224)) # standard CNN input size
+    # img_array = np.array(img) / 255.0 # normalize pixel values
+    
+    # 2. Load Model & Predict (Placeholder)
+    # model = tf.keras.models.load_model('dexa_analyzer.h5')
+    # prediction = model.predict(img_array)
+    
+    # 3. Simulate Output (Remove this block when using real model)
+    time.sleep(1) # Simulate processing delay
+    mock_data = {
+        "Body Fat Percentage": np.round(np.random.uniform(18.5, 24.2), 1),
+        "Lean Muscle Mass (kg)": np.round(np.random.uniform(48.0, 55.5), 1),
+        "Bone Mineral Density": np.round(np.random.uniform(1.1, 1.4), 2),
+        "Visceral Fat Level": np.random.randint(3, 8)
+    }
+    return mock_data
+
+# ==========================================
+# 5. DIALOGS (Confirmations)
+# ==========================================
+# 5a. Start Session Dialog
+@st.dialog("Start Session Confirmation")
+def show_start_confirmation(pid, proto):
+    st.write("### Safety Check")
+    st.info("Please confirm that electrode placement and skin conditions have been verified manually.")
+    st.warning("Ensure patient is ready for stimulation.")
+    
+    col_d1, col_d2 = st.columns(2)
+    
+    # --- YES BUTTON (Direct Logic) ---
+    if col_d1.button("Yes (Start)", type="primary"):
+        # 1. Update State DIRECTLY
+        # Reset timer only if this is a fresh start
+        if st.session_state.system_status != "PAUSED":
+            st.session_state.elapsed_time = 0.0
+            
+        st.session_state.system_status = "ACTIVE"
+        st.session_state.session_start_time = time.time()
+        
+        # 2. Log Event (Protected from errors)
+        try:
+            log_event(pid, "SESSION_START", f"Protocol={proto}")
+        except Exception:
+            pass # Use 'pass' to ensure the code continues to st.rerun() even if DB fails
+            
+        # 3. CRITICAL: Force Rerun to close dialog and update Main UI
+        st.rerun()
+
+    # --- NO BUTTON ---
+    if col_d2.button("No (Cancel)"):
+        st.rerun()
+
+# 5b. Intensity Adjustment Dialog
+@st.dialog("Confirm Intensity Adjustment")
+def show_intensity_confirmation(pid, new_val):
+    st.write(f"### Adjust Intensity?")
+    st.write(f"You are changing the intensity to **{new_val} mA**.")
+    st.warning("Please verify this level is safe for the patient.")
+
+    col_i1, col_i2 = st.columns(2)
+    
+    # --- ACCEPT BUTTON ---
+    if col_i1.button("Accept", type="primary"):
+        # 1. Update the session state immediately
+        st.session_state.intensity = new_val
+        
+        # 2. Try to log, but prevent errors from keeping the window open
+        try:
+            log_event(pid, "PARAM_CHANGE", f"Intensity set to {new_val}")
+            # Use toast because it persists nicely after the rerun
+            st.toast(f"Intensity updated to {new_val} mA", icon="⚡") 
+        except Exception:
+            pass # Ignore logging errors to ensure the UI still works
+            
+        # 3. Force Close the dialog
+        st.rerun() 
+
+    # --- DENY BUTTON ---
+    if col_i2.button("Deny"):
+        st.rerun() # Auto-close without saving
+
+# ==========================================
+# 6. SIDEBAR
+# ==========================================
+with st.sidebar:
+    st.title("AI-Enchanced EMS System")
+    st.caption(f"ML Engine: {model_status}")
+    st.divider()
+
+    st.subheader("Patient Profile")
+    patient_id = st.text_input("Patient ID", value="PT-2024-89")
+    age_group = st.selectbox("Age Group", ["60-69", "70-79", "80+"])
+    condition_tags = st.multiselect("Conditions", ["Sarcopenia", "Post-Stroke", "Osteoarthritis"], default=["Sarcopenia"])
+    
+    st.info(f"Height: 170 cm | Weight: 70 kg")
+    
+    user_role = st.selectbox("User Role", ["Doctor", "Caregiver"])
+    
+    st.divider()
+
+    st.subheader("Simulation")
+    sim_mode = st.radio("Patient State:", ["Normal", "Risk (Abnormal)"])
+    st.session_state.connected = st.toggle("Device Connected", value=True)
+
+    st.divider()
+
+    st.subheader("Session Control")
+    protocol = st.selectbox("Protocol", ["Muscle Stimulation"])
+    
+    # Styled buttons using columns for layout
+    c1, c2 = st.columns(2)
+    
+# --- CUSTOM CSS FOR COLORED BUTTONS ---
+st.markdown("""
+<style>
+    /* Target the 3 columns for buttons */
+    /* Column 1: Start (Green) */
+    div[data-testid="column"]:nth-of-type(1) div.stButton > button {
+        background-color: #2E8B57;
+        color: white;
+        border: none;
+    }
+    div[data-testid="column"]:nth-of-type(1) div.stButton > button:hover {
+        background-color: #3CB371; /* Lighter Green on hover */
+    }
+
+    /* Column 2: Pause (Orange) */
+    div[data-testid="column"]:nth-of-type(2) div.stButton > button {
+        background-color: #FF8C00; 
+        color: white;
+        border: none;
+    }
+    div[data-testid="column"]:nth-of-type(2) div.stButton > button:hover {
+        background-color: #FFA500; /* Lighter Orange on hover */
+    }
+
+    /* Column 3: Stop (Red) */
+    div[data-testid="column"]:nth-of-type(3) div.stButton > button {
+        background-color: #D32F2F;
+        color: white;
+        border: none;
+    }
+    div[data-testid="column"]:nth-of-type(3) div.stButton > button:hover {
+        background-color: #EF5350; /* Lighter Red on hover */
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 7. HEADER & STATUS
+# ==========================================
+# Wrap header in a card for better visuals
+st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+header_cols = st.columns([3, 1, 1, 1])
+with header_cols[0]:
+    st.title("Clinical Dashboard")
+    st.caption(f"Patient: **{patient_id}** | Protocol: **{protocol}**")
+
+with header_cols[1]:
+    color_map = {"ACTIVE": "#2A9D8F", "IDLE": "#78909C", "PAUSED": "#FFB74D", "STOPPED": "#EF5350"}
+    status_color = color_map.get(st.session_state.system_status, "#78909C")
+    st.markdown(f"<div style='text-align:center; color:{status_color}; font-weight:bold; font-size:1.2em; margin-top:10px;'>● {st.session_state.system_status}</div>", unsafe_allow_html=True)
+
+with header_cols[2]:
+    # Calculate Total Seconds
+    total_seconds = st.session_state.elapsed_time
+    
+    # If currently running, add the time since the last "Start" click
+    if st.session_state.system_status == "ACTIVE" and st.session_state.session_start_time:
+        total_seconds += (time.time() - st.session_state.session_start_time)
+        
+    # Format to MM:SS
+    elapsed = int(total_seconds)
+    timer = f"{elapsed//60:02d}:{elapsed%60:02d}"
+    st.metric("Session Time", timer)
+
+with header_cols[3]:
+    # Direct Action: No Dialog, Immediate Stop
+    if st.button("Emergency STOP", type="primary", use_container_width=True):
+        # 1. Immediate State Reset
+        st.session_state.system_status = "STOPPED"
+        st.session_state.intensity = 0
+        
+        # 2. Reset Timer
+        st.session_state.elapsed_time = 0.0 
+        st.session_state.session_start_time = None
+        
+        # 3. Log Event
+        try:
+            log_event(patient_id, "EMERGENCY_STOP", "Immediate Trigger - No Confirmation")
+        except Exception:
+            pass
+
+        # 4. Force Refresh
+        st.rerun()
+
+# ==========================================
+# 8. SESSION CONTROLS (Moved to Main Body)
+# ==========================================
+st.markdown("### Session Control")
+col_start, col_pause, col_stop = st.columns(3)
+
+# 1. START BUTTON
+with col_start:
+    if st.session_state.system_status == "ACTIVE":
+        st.button("✅ Session Running...", disabled=True, use_container_width=True)
+    else:
+        if st.button("▶ START", use_container_width=True):
+            show_start_confirmation(patient_id, protocol)
+
+# 2. PAUSE BUTTON 
+with col_pause:
+    is_disabled = st.session_state.system_status != "ACTIVE"
+    if st.button("⏸ PAUSE", disabled=is_disabled, use_container_width=True):
+        if st.session_state.session_start_time:
+            segment_duration = time.time() - st.session_state.session_start_time
+            st.session_state.elapsed_time += segment_duration
+        
+        st.session_state.system_status = "PAUSED"
+        st.session_state.session_start_time = None
+        log_event(patient_id, "SESSION_PAUSE")
+        st.rerun()
+
+# 3. STOP BUTTON 
+with col_stop:
+    is_disabled = st.session_state.system_status not in ["ACTIVE", "PAUSED"]
+    if st.button("⏹ STOP SESSION", disabled=is_disabled, use_container_width=True):
+        st.session_state.system_status = "STOPPED"
+        st.session_state.intensity = 0
+        st.session_state.elapsed_time = 0.0 
+        st.session_state.session_start_time = None
+        log_event(patient_id, "SESSION_STOP")
+        st.rerun()
+
+# ==========================================
+# 8. MAIN LOGIC LOOP
+# ==========================================
+if st.session_state.connected:
+    update_telemetry_stream()
+    
+    if st.session_state.system_status == "ACTIVE":
+        raw_ml_df = generate_ml_window(sim_mode)
+        st.session_state.ml_window = raw_ml_df
+        
+        if rf_model:
+            feats = extract_features(raw_ml_df)
+            feats = feats[feature_names]
+            pred = rf_model.predict(feats)[0]
+            prob = rf_model.predict_proba(feats)[0][1]
+            
+            st.session_state.ml_prediction = "NORMAL" if pred == 1 else "ABNORMAL"
+            st.session_state.ml_probability = prob
+
+# ==========================================
+# 9. TABS
+# ==========================================
+
+tab_live, tab_ai, tab_scan, tab_ctrl, tab_logs, tab_progress = st.tabs(
+    ["Live Monitoring", "AI & RAG Analysis", "Scan Analysis", "Device Control", "Audit Logs", "Progress Summary"]
+)
+
+# --- TAB 1: IMPROVED LIVE MONITORING LAYOUT ---
+with tab_live:
+    # 1. Prepare data
+    tele = st.session_state.telemetry
+    latest_emg = tele['emg'].iloc[-1] if not tele.empty else 0
+    last_hr = tele['hr'].iloc[-1] if not tele.empty else 0
+    last_imp = tele['imp'].iloc[-1] if not tele.empty else 0
+    recent_peak = tele['emg'].tail(50).max() if not tele.empty else 0
+
+    # AI prediction
+    pred_label, pred_icon, pred_desc = predict_muscle_state(latest_emg)
+
+    # ================= ROW 1: VITAL METRICS =================
+    st.markdown("### Vital Signs & EMG Status")
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    with col_m1:
+        st.metric("🫀 Heart Rate", f"{last_hr} BPM", delta=None)
+    with col_m2:
+        st.metric("⚡ Impedance", f"{last_imp:.1f} kΩ", delta=None)
+    with col_m3:
+        st.metric("📈 Current EMG", f"{latest_emg:.1f} µV", 
+                  delta=f"{latest_emg - tele['emg'].iloc[-2] if len(tele)>1 else 0:.1f}")
+    with col_m4:
+        st.metric("🔔 Peak (Session)", f"{recent_peak:.1f} µV")
+
+    st.markdown("---")
+
+    # ================= ROW 2: MAIN TELEMETRY PLOT =================
+    st.markdown("### Real‑Time EMG Telemetry")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=tele["t"], y=tele["emg"],
+        mode="lines", fill='tozeroy',
+        line=dict(color='#2A9D8F', width=3)
+    ))
+    fig.update_layout(
+        height=320,
+        margin=dict(l=10, r=10, t=20, b=10),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        yaxis=dict(title="Amplitude (µV)", gridcolor='#E2E8F0'),
+        xaxis=dict(title="Time", showgrid=False),
+        showlegend=False
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ================= ROW 3: SIMPLIFIED ANALYSIS & FEEDBACK =================
+    st.markdown("### Clinical Overview & Patient Input")
+    col_analysis, col_feedback = st.columns([2, 1], gap="large")
+
+    with col_analysis:
+        st.markdown("#### 🧠 AI Real‑Time Analysis")
+        
+        # Modern AI card (without activation/system status)
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #F8FAFC 0%, #EFF6FF 100%);
+            border-radius: 16px;
+            padding: 16px;
+            border: 1px solid #E2E8F0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        ">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <span style="font-size: 1.5rem;">{pred_icon}</span>
+                <span style="font-weight: 600; color: #1E293B;">AI PREDICTION</span>
+            </div>
+            <div style="font-size: 1.1rem; font-weight: 700; color: #0F172A; margin-bottom: 6px;">
+                {pred_label}
+            </div>
+            <div style="font-size: 0.8rem; color: #475569; margin-bottom: 12px;">
+                {pred_desc}
+            </div>
+            <div style="height: 4px; background: #E2E8F0; border-radius: 2px;">
+                <div style="width: {min(100, (latest_emg/1000)*100)}%; height: 4px; background: #2A9D8F; border-radius: 2px;"></div>
+            </div>
+            <div style="font-size: 0.7rem; color: #64748B; margin-top: 6px;">
+                EMG intensity indicator
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.caption("☁️ Real‑time data sync · 1 Hz")
+
+    with col_feedback:
+        st.markdown("#### 💬 Patient Feedback")
+        
+        pain = st.slider(
+            "Pain Score (0‑10)", 0, 10,
+            value=st.session_state.get("live_pain", 2),
+            key="live_pain"
+        )
+        fatigue = st.slider(
+            "Fatigue Level (0‑10)", 0, 10,
+            value=st.session_state.get("live_fatigue", 4),
+            key="live_fatigue"
+        )
+        
+        if pain > 7:
+            st.error("🚨 High pain – consider reducing intensity.")
+        elif pain > 4:
+            st.warning("⚠️ Moderate pain – monitor closely.")
+        else:
+            st.success("✅ Pain acceptable.")
+        
+        if fatigue > 7:
+            st.info("💤 High fatigue – suggest longer rest periods.")
+
+    # ================= ROW 4: ENHANCED RAW SIGNAL EXPANDER =================
+    with st.expander("🔍 View Raw 4‑Channel Signal (Advanced)"):
+        if st.session_state.ml_window is not None:
+            # Get the current raw window (last 200 samples)
+            raw_df = st.session_state.ml_window
+            
+            # Compute RMS for each channel (latest window)
+            rms_values = {}
+            for col in raw_df.columns:
+                rms_values[col] = np.sqrt(np.mean(raw_df[col]**2))
+            
+            # Create a summary dataframe
+            summary_df = pd.DataFrame({
+                "Muscle Channel": list(rms_values.keys()),
+                "RMS (µV)": [f"{v:.1f}" for v in rms_values.values()],
+                "Clinical State": [
+                    "Normal" if v < 8 else "Elevated" if v < 15 else "High"
+                    for v in rms_values.values()
+                ]
+            })
+            
+            st.markdown("#### 📊 Channel Summary (Last 200 samples)")
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            
+            st.markdown("#### 📈 Raw EMG Trends")
+            st.line_chart(raw_df, height=300)
+            
+            st.markdown("#### 💡 Clinical Notes")
+            st.info("""
+            - **Recto Femoral** – primary knee extensor; high activity suggests good quadriceps recruitment.
+            - **Biceps Femoral** – hamstring; imbalance with Recto Femoral may indicate co‑contraction.
+            - **Vasto Medial** – key for patellar stability; low activity can predispose to knee pain.
+            - **EMG Semitendinoso** – medial hamstring; compare with Biceps Femoral for lateral/medial balance.
+            """)
+            
+            # Signal quality indicator (simulated)
+            st.markdown("#### 📡 Signal Quality")
+            quality_score = np.random.uniform(85, 98)  # replace with real SNR calculation
+            st.progress(quality_score/100, text=f"SNR: {quality_score:.1f}% – Good")
+        else:
+            st.info("No active raw signal. Start a session to see 4‑channel EMG data.")
+
+# --- TAB 2: AI & RAG ANALYSIS ---
+with tab_ai:
+    col_rag, col_ml = st.columns(2)
+    
+    # --- A. Rule-Based RAG (Safety) ---
+    with col_rag:
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("Safety & Optimization (Rules)")
+        
+        if st.session_state.system_status == "ACTIVE":
+            # Use session state values from Live Monitoring tab
+            pain_val = st.session_state.get("live_pain", 0)
+            fatigue_val = st.session_state.get("live_fatigue", 0)
+            
+            if pain_val >= 6:
+                st.markdown("""<div class="alert-box alert-risk">
+                <strong>High Pain Detected</strong><br>
+                Observation: Pain Score > 6<br>
+                Action: Reducing intensity by 20% (Rule PAIN-01)
+                </div>""", unsafe_allow_html=True)
+            elif fatigue_val >= 7:
+                st.markdown("""<div class="alert-box alert-info">
+                <strong>High Fatigue</strong><br>
+                Observation: Patient reported fatigue > 7<br>
+                Action: Increasing OFF time (Rule ONOFF-04)
+                </div>""", unsafe_allow_html=True)
+            else:
+                st.markdown("""<div class="alert-box alert-safe">
+                <strong>System Nominal</strong><br>
+                All parameters within safety limits.<br>
+                Action: Maintain current protocol (Rule MAIN-01)
+                </div>""", unsafe_allow_html=True)
+        else:
+            st.caption("System Inactive - Start session to monitor safety rules.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- B. ML Model (Gait Analysis) ---
+    with col_ml:
+        st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+        st.subheader("Gait Pathology (ML Engine)")
+        
+        res = st.session_state.ml_prediction
+        prob = st.session_state.ml_probability
+        
+        if st.session_state.system_status == "ACTIVE":
+            if res == "ABNORMAL":
+                st.markdown(f"""
+                <div class="alert-box alert-risk">
+                <h3 style="color:#B71C1C; margin:0;">PATHOLOGY DETECTED</h3>
+                <p>Confidence: {prob:.1%}</p>
+                <hr>
+                <p><strong>Recommendation:</strong> Evaluate electrode placement or reduce frequency.</p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="alert-box alert-safe">
+                <h3 style="color:#1B5E20; margin:0;">NORMAL GAIT</h3>
+                <p>Confidence: {prob:.1%}</p>
+                <hr>
+                <p><strong>Recommendation:</strong> Continue current protocol.</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with st.expander("View Raw Features"):
+                if st.session_state.ml_window is not None:
+                    feat_view = extract_features(st.session_state.ml_window)
+                    st.dataframe(feat_view, hide_index=True)
+        else:
+            st.info("Start session to enable ML analysis.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# --- TAB 3 (NEW): SCAN ANALYSIS ---
+with tab_scan:
+    st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+    st.subheader("InBody/DEXA Scan Digitizer")
+    st.info("Align the printed scan result within the camera frame below.")
+    
+    col_cam, col_results = st.columns([1, 1.5])
+    
+    with col_cam:
+        # The Camera Input Widget
+        scan_img = st.camera_input("Capture Scan Result")
+    
+    with col_results:
+        if scan_img:
+            st.markdown("##### Analysis Status")
+            # Button to trigger CNN
+            if st.button("Run Scan Analysis", type="primary"):
+                with st.spinner("Processing image via Neural Network..."):
+                    # Call our helper function
+                    results = analyze_scan_image(scan_img)
+                
+                st.success("Digitization Complete")
+                
+                # Display Results in a nice metric grid
+                c_res1, c_res2 = st.columns(2)
+                c_res1.metric("Body Fat %", f"{results['Body Fat Percentage']}%")
+                c_res2.metric("Muscle Mass", f"{results['Lean Muscle Mass (kg)']} kg")
+                
+                c_res3, c_res4 = st.columns(2)
+                c_res3.metric("Bone Density", f"{results['Bone Mineral Density']} g/cm²")
+                c_res4.metric("Visceral Fat", f"Lvl {results['Visceral Fat Level']}")
+                
+                # Option to log this to the database
+                if st.button("Save to Patient Record"):
+                    details = json.dumps(results)
+                    log_event(patient_id, "SCAN_UPLOAD", details)
+                    st.toast("Scan data saved to audit log!", icon="✅")
+        else:
+            st.markdown("""
+            <div style="text-align:center; padding:40px; color:#90A4AE; border: 2px dashed #CFD8DC; border-radius:10px;">
+                Waiting for image capture...<br>
+                <small>Ensure good lighting for best CNN accuracy.</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- TAB 4: DEVICE CONTROL ---
+with tab_ctrl:
+    st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+    st.subheader("Stimulation Parameters")
+    
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Intensity", f"{st.session_state.intensity} mA")
+    c2.metric("Frequency", f"{st.session_state.frequency} Hz")
+    c3.metric("Pulse Width", f"{st.session_state.pulse_width} us")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.progress(0.5, text=f"Duty Cycle: {st.session_state.duty_on}s ON / {st.session_state.duty_off}s OFF")
+    
+    st.divider()
+    
+    if user_role == "Doctor":
+        col_adj, col_btn = st.columns([3, 1])
+        with col_adj:
+            new_int = st.slider("Adjust Intensity (mA)", 0, 100, st.session_state.intensity)
+        with col_btn:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if new_int != st.session_state.intensity:
+                # Trigger the new Intensity Confirmation Dialog
+                if st.button("Apply Changes", type="primary"):
+                    show_intensity_confirmation(patient_id, new_int)
+    else:
+        st.warning("Intensity adjustments are locked for Caregiver role.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- TAB 5: LOGS ---
+with tab_logs:
+    st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+    st.subheader("Session Audit Trail")
+    df_logs = read_logs(patient_id)
+    st.dataframe(df_logs, use_container_width=True, height=300)
+    
+    csv = df_logs.to_csv(index=False).encode("utf-8")
+    st.download_button("Download CSV", csv, f"audit_{patient_id}.csv", "text/csv")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- TAB 5: PROGRESS SUMMARY ---
+with tab_progress:
+    st.markdown('<div class="dashboard-card">', unsafe_allow_html=True)
+    st.subheader("Session Summary & Progress")
+    
+    col_p1, col_p2 = st.columns(2)
+    
+    # 1. Pain and Fatigue Data
+    pain_score_progress = pd.DataFrame({
+        'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'],
+        'Pain Score': [5, 4, 3, 2, 1]
+    })
+    
+    fatigue_progress = pd.DataFrame({
+        'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'],
+        'Fatigue Level': [6, 5, 4, 3, 2]
+    })
+
+    with col_p1:
+        st.markdown("**Pain Score Trend**")
+        st.line_chart(pain_score_progress.set_index('Time'), color="#E57373")
+        
+    with col_p2:
+        st.markdown("**Fatigue Level Trend**")
+        st.line_chart(fatigue_progress.set_index('Time'), color="#64B5F6")
+        
+    st.markdown("**Muscle Activation (EMG) - Session Overview**")
+    emg_progress = pd.DataFrame({
+        'Time': ['0 min', '5 min', '10 min', '15 min', '20 min'],
+        'EMG Amplitude': [15, 18, 20, 22, 24]
+    })
+    st.bar_chart(emg_progress.set_index('Time'), color="#2A9D8F")
+    
+    st.divider()
+    
+    # 2. Muscle Mass Trend (Analysis over Past Sessions)
+    st.subheader("Long-Term Musculoskeletal Health")
+    st.markdown("**Muscle Mass Trend (Last 30 Days)**")
+    
+    # Simulate historical data for muscle mass (Hypertrophy trend)
+    dates = pd.date_range(end=datetime.now(), periods=30, freq='D')
+    base_mass = np.linspace(68, 69.8, 30) # Gradual increase
+    noise = np.random.normal(0, 0.1, 30)
+    mass_values = base_mass + noise
+    
+    muscle_mass_df = pd.DataFrame({
+        'Date': dates,
+        'Muscle Mass (kg)': mass_values
+    })
+    
+    # Using an area chart for the trend
+    st.area_chart(muscle_mass_df.set_index('Date'), color="#FF9800")
+    st.caption("Showing estimated lean muscle mass trajectory based on bio-impedance analysis.")
+    
+    st.divider()
+    
+    # 3. Download Report Feature
+    st.subheader("Export Report")
+    
+    # Generate the report string
+    report_text = generate_report(patient_id, muscle_mass_df, pain_score_progress, fatigue_progress)
+    
+    st.download_button(
+        label="📄 Download Progress Report (TXT)",
+        data=report_text,
+        file_name=f"Report_{patient_id}_{datetime.now().strftime('%Y%m%d')}.txt",
+        mime="text/plain",
+        type="primary"
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
+# 10. AUTO REFRESH
+# ==========================================
+if st.session_state.system_status == "ACTIVE":
+    time.sleep(0.2)
+    st.rerun()
+
+
